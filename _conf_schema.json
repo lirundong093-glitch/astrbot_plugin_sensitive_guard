@@ -1,0 +1,50 @@
+{
+  "enabled_groups": {
+    "description": "监控群聊（留空监控所有群）",
+    "type": "list",
+    "default": [],
+    "hint": "每行填写一个群号，如916228568，仅这些群会触发敏感词检测"
+  },
+  "whitelist_users": {
+    "description": "用户白名单（不检测不禁言）",
+    "type": "list",
+    "default": [],
+    "hint": "每行填写一个QQ号，类似群号，白名单用户的消息完全跳过检测"
+  },
+  "max_warn_count": {
+    "description": "踢出前警告次数",
+    "type": "int",
+    "default": 3,
+    "hint": "第N次触发时踢出群聊，默认3次"
+  },
+  "first_ban_seconds": {
+    "description": "首次禁言时长（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "第一次触发时的禁言秒数"
+  },
+  "second_ban_seconds": {
+    "description": "二次禁言时长（秒）",
+    "type": "int",
+    "default": 600,
+    "hint": "第二次触发时的禁言秒数"
+  },
+  "filter_llm_output": {
+    "description": "过滤 LLM 输出中的敏感词",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，LLM 回复中命中敏感词时自动替换为等长 *"
+  },
+  "word_banks": {
+    "description": "违禁词词库选择",
+    "type": "string",
+    "default": "1,2,3,4,5",
+    "hint": "用半角逗号分隔数字选择：1=反动 2=政治 3=暴恐 4=贪腐 5=涉枪涉爆 6=COVID-19 7=GFW补充 8=其他 9=广告 10=新思想启蒙 11=民生 12=网易前端 13=色情类型 14=色情词库 15=补充 16=零时-Tencent 17=非法网址。默认1,2,3,4,5"
+  },
+  "auto_revoke": {
+    "description": "自动撤回违规消息",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，检测到敏感词时将自动撤回（删除）违规消息（仅支持 QQ 平台）"
+  }
+}
