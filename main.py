@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from urllib.request import urlopen, Request
 from urllib.parse import quote
@@ -111,6 +112,7 @@ class SensitiveGuard(Star):
         os.makedirs(self._data_dir, exist_ok=True)
         self._records_path = os.path.join(self._data_dir, "records.json")
         self._detection_log_path = os.path.join(self._data_dir, "detection.log")
+        self._words_cache_path = os.path.join(self._data_dir, "words_cache.json")
 
         # ── 配置读取 ──
         self._enabled_groups: set[str]  = set(config.get("enabled_groups", []))
@@ -118,6 +120,13 @@ class SensitiveGuard(Star):
         self._max_warn  = int(config.get("max_warn_count", 3))
         self._filter_llm = config.get("filter_llm_output", True)
         self._auto_revoke = config.get("auto_revoke", False)
+        self._cache_hours = int(config.get("cache_hours", 24))
+        self._custom_words: list[str] = [
+            w.strip() for w in config.get("custom_words", []) if w and w.strip()
+        ]
+        self._custom_safe_words: set[str] = {
+            w.strip() for w in config.get("custom_safe_words", []) if w and w.strip()
+        }
         self._ban1 = int(config.get("first_ban_seconds", 60))
         self._ban2 = int(config.get("second_ban_seconds", 600))
 
@@ -168,6 +177,12 @@ class SensitiveGuard(Star):
 
         self._build_ac()
         await loop.run_in_executor(None, self._load_safe_words)
+        # ── 合并自定义安全词 ──
+        if self._custom_safe_words:
+            self._safe_words.update(self._custom_safe_words)
+            logger.info(
+                f"[sensitive_guard] 自定义安全词: {len(self._custom_safe_words)} 词"
+            )
         self._ready = True
         logger.info(
             f"[sensitive_guard] 安全上下文词表就绪: {len(self._safe_words)} 词"
@@ -187,17 +202,74 @@ class SensitiveGuard(Star):
             return None
 
     def _load_words_sync(self) -> None:
-        """下载选中的词库并存入 self.words。"""
-        logger.info("[sensitive_guard] 开始下载词库...")
-        for cat_id, filename in self._selected_categories.items():
-            text = self._download_file(filename)
-            if text is None:
-                continue
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-            self.words[cat_id] = set(lines)
-            logger.info(f"[sensitive_guard] {filename}: {len(lines)} 词")
-        total = sum(len(v) for v in self.words.values())
-        logger.info(f"[sensitive_guard] 词库下载完毕，共 {total} 词 / {len(self.words)} 类")
+        """加载词库：优先读磁盘缓存，未命中则下载并缓存。"""
+        # 尝试从缓存加载
+        cached = self._load_words_cache()
+        if cached is not None:
+            self.words = cached
+            total = sum(len(v) for v in self.words.values())
+            logger.info(
+                f"[sensitive_guard] 从缓存加载词库: {total} 词 / {len(self.words)} 类"
+            )
+        else:
+            logger.info("[sensitive_guard] 缓存未命中，开始下载词库...")
+            for cat_id, filename in self._selected_categories.items():
+                text = self._download_file(filename)
+                if text is None:
+                    continue
+                lines = [line.strip() for line in text.split("\n") if line.strip()]
+                self.words[cat_id] = set(lines)
+                logger.info(f"[sensitive_guard] {filename}: {len(lines)} 词")
+            # 写入缓存
+            self._save_words_cache()
+            total = sum(len(v) for v in self.words.values())
+            logger.info(
+                f"[sensitive_guard] 词库下载完毕，共 {total} 词 / {len(self.words)} 类"
+            )
+
+        # ── 自定义词库（不缓存，始终从配置读取）──
+        if self._custom_words:
+            self.words["custom"] = set(self._custom_words)
+            logger.info(
+                f"[sensitive_guard] 自定义词库: {len(self._custom_words)} 词"
+            )
+
+    def _load_words_cache(self) -> dict[str, set[str]] | None:
+        """从磁盘加载词库缓存。返回 None 表示缓存不可用或已过期。"""
+        if self._cache_hours == 0:
+            return None
+        try:
+            mtime = os.path.getmtime(self._words_cache_path)
+            age_hours = (time.time() - mtime) / 3600
+            if age_hours > self._cache_hours:
+                logger.info(
+                    f"[sensitive_guard] 缓存已过期 ({age_hours:.1f}h > {self._cache_hours}h)"
+                )
+                return None
+            with open(self._words_cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # 检查缓存的类别是否与当前选中一致
+            cached_cats = set(data.keys())
+            if cached_cats != set(self._selected_categories.keys()):
+                logger.info(
+                    "[sensitive_guard] 词库选择已变更，缓存失效"
+                )
+                return None
+            return {k: set(v) for k, v in data.items()}
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _save_words_cache(self) -> None:
+        """将当前词库写入磁盘缓存。自定义词不缓存。"""
+        try:
+            with open(self._words_cache_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {k: sorted(v) for k, v in self.words.items()},
+                    f,
+                    ensure_ascii=False,
+                )
+        except Exception as e:
+            logger.warning(f"[sensitive_guard] 词库缓存写入失败: {e}")
 
     # ── 安全上下文词表下载 ──
 
@@ -233,7 +305,7 @@ class SensitiveGuard(Star):
                     continue
                 # THUOCL 格式: 词 \t 词频
                 word = line.split("\t")[0]
-                if word and len(word) >= 2:
+                if word:
                     self._safe_words.add(word)
                     count += 1
             logger.info(f"[sensitive_guard] {filename}: 加载 {count} 个安全词")
@@ -409,7 +481,7 @@ class SensitiveGuard(Star):
                         ni = seg_idx + offset
                         if 0 <= ni < len(seg) and offset != 0:
                             nw = seg[ni].strip()
-                            if nw and len(nw) >= 2:
+                            if nw:
                                 surrounding.append(nw)
                     break  # 找到第一个交集词就够了
                 pos = sw_end

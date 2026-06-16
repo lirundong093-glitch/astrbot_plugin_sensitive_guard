@@ -3,5 +3,6 @@ display_name: 敏感词自动禁言
 desc: 群消息敏感词自动检测并禁言，AC自动机+拼音匹配，支持渐进式处罚（60s→600s→踢出），每日重置。检测反动词库/政治类型/暴恐词库/贪腐词库/涉枪涉爆五类。
 version: v1.0.0
 author: Lucy
+repo: https://github.com/lirundong093-glitch/astrbot_plugin_sensitive_guard
 support_platforms:
   - aiocqhttp
