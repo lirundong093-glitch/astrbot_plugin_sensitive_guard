@@ -529,12 +529,21 @@ class SensitiveGuard(Star):
                     # 窗口跨越 jieba 分词边界则放行（人为谐音不会跨词）
                     if not any(ss <= i and i + n <= se for ss, se in seg_spans):
                         continue
+                    # 窗口是某个更长 jieba 词的子串则放行（如"底之"是"井底之蛙"的子串）
+                    if any(ss <= i and i + n <= se and (se - ss) > n
+                           for ss, se in seg_spans):
+                        continue
                     hits.append((word, cat_id))
                     seen.add(word)
         return hits
 
+    # At 提及模式，如 [At:1290967899]
+    _AT_RE = re.compile(r'\[At:\d+\]')
+
     def _check(self, text: str) -> list[tuple[str, str]]:
         """核心检测管道：繁→简 → 去干扰 → AC 匹配 → jieba 校验 → 拼音匹配。"""
+        # 先 strip 掉 At 提及，防止 [At:123]学长 → 123学长 这类跨越匹配
+        text = self._AT_RE.sub('', text)
         simplified = self._t2s.convert(text)
         cleaned = self._strip_interference(simplified)
         hits = self._match_ac(cleaned)
